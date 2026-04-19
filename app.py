@@ -234,6 +234,19 @@ def apply_action_filters(data, selected_actions):
     return data[mask]
 
 
+def sort_group_values(values):
+    cleaned = pd.Series(values).dropna().astype(str).str.strip()
+    cleaned = cleaned[cleaned != ""].unique().tolist()
+
+    def key_func(val):
+        num = pd.to_numeric(val, errors="coerce")
+        if pd.notna(num):
+            return (0, float(num), val.lower())
+        return (1, val.lower())
+
+    return sorted(cleaned, key=key_func)
+
+
 def status_counts(data):
     return (
         int((data["status"] == "valid").sum()),
@@ -880,7 +893,7 @@ with tab_queue:
             key="queue_bug_type",
         )
     with q3:
-        all_groups = sorted(df[GROUP_COL].dropna().unique(), key=lambda x: (not str(x).isdigit(), str(x)))
+        all_groups = sort_group_values(df[GROUP_COL])
         selected_groups = st.multiselect(
             "Group filter",
             all_groups,
@@ -1045,7 +1058,7 @@ with tab_group:
     st.subheader("🧭 Search by Group")
 
     if GROUP_COL in df.columns:
-        group_values = sorted(df[GROUP_COL].dropna().unique(), key=lambda x: (not str(x).isdigit(), str(x)))
+        group_values = sort_group_values(df[GROUP_COL])
         g1, g2, g3 = st.columns([1.4, 1, 1])
         with g1:
             selected_group = st.selectbox("Pick a group", group_values, key="group_pick")
