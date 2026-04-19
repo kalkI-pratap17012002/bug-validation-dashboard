@@ -255,6 +255,13 @@ def status_counts(data):
     )
 
 
+def acceptance_rate(valid, invalid):
+    evaluated = valid + invalid
+    if evaluated == 0:
+        return 0.0, 0
+    return round(valid / evaluated * 100, 1), evaluated
+
+
 def discussion_counts(data):
     return {
         "Both Present": int(data["has_discussion"].sum()),
@@ -268,13 +275,15 @@ def render_status_metrics(data):
     total = len(data)
     valid, invalid, pending = status_counts(data)
     hit_rate = round(valid / total * 100, 1) if total > 0 else 0
+    acceptance_pct, evaluated = acceptance_rate(valid, invalid)
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("🐛 Total", total)
     m2.metric("✅ Valid", valid)
     m3.metric("❌ Invalid", invalid)
     m4.metric("⏳ Pending", pending)
     m5.metric("🎯 Hit Rate", f"{hit_rate}%")
+    m6.metric("🧪 Acceptance Rate", f"{acceptance_pct}%")
 
 
 def render_discussion_metrics(data):
@@ -345,6 +354,56 @@ def status_donut(valid, invalid, pending, title="", height=190):
                 x=0.5,
                 y=0.5,
                 font_size=18,
+                font_color="#f1f5f9",
+                font_family="Inter",
+                showarrow=False,
+            )
+        ],
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+        margin=dict(t=28, b=0, l=0, r=0),
+        height=height,
+    )
+    return fig
+
+
+def acceptance_donut(valid, invalid, title="Acceptance", height=190):
+    acceptance_pct, evaluated = acceptance_rate(valid, invalid)
+    if evaluated == 0:
+        labels = ["No Evaluated Bugs"]
+        values = [1]
+        colors = ["#475569"]
+        center_text = "<b>0%</b><br><span style='font-size:10px;color:#94a3b8'>0 evaluated</span>"
+    else:
+        labels = ["Valid", "Invalid"]
+        values = [valid, invalid]
+        colors = ["#22c55e", "#ef4444"]
+        center_text = (
+            f"<b>{acceptance_pct}%</b><br>"
+            f"<span style='font-size:10px;color:#94a3b8'>{valid}/{evaluated}</span>"
+        )
+
+    fig = go.Figure(
+        go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.58,
+            marker=dict(colors=colors, line=dict(color="#111827", width=2)),
+            textinfo="value",
+            textfont=dict(size=12, color="#ffffff", family="Inter"),
+            hovertemplate="%{label}: %{value} (%{percent})<extra></extra>",
+            sort=False,
+        )
+    )
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=12, color="#c8cfe0"), x=0.5, xanchor="center", y=0.97),
+        annotations=[
+            dict(
+                text=center_text,
+                x=0.5,
+                y=0.5,
+                font_size=16,
                 font_color="#f1f5f9",
                 font_family="Inter",
                 showarrow=False,
@@ -472,7 +531,7 @@ def render_lookup_charts(data, selected_bug_filter, key_prefix):
         sec_valid, sec_invalid, sec_pending = status_counts(sec)
         func_valid, func_invalid, func_pending = status_counts(func)
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.plotly_chart(
                 status_donut(all_valid, all_invalid, all_pending, "Overall", 190),
@@ -497,9 +556,15 @@ def render_lookup_charts(data, selected_bug_filter, key_prefix):
                 width="stretch",
                 key=f"{key_prefix}_disc",
             )
+        with c5:
+            st.plotly_chart(
+                acceptance_donut(all_valid, all_invalid, "🧪 Acceptance", 190),
+                width="stretch",
+                key=f"{key_prefix}_acceptance",
+            )
     else:
         valid, invalid, pending = status_counts(data)
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.plotly_chart(
                 status_donut(valid, invalid, pending, f"{selected_bug_filter} Bugs", 220),
@@ -511,6 +576,12 @@ def render_lookup_charts(data, selected_bug_filter, key_prefix):
                 discussion_donut(data, "💬 Discussion", 220),
                 width="stretch",
                 key=f"{key_prefix}_disc_filtered",
+            )
+        with c3:
+            st.plotly_chart(
+                acceptance_donut(valid, invalid, "🧪 Acceptance", 220),
+                width="stretch",
+                key=f"{key_prefix}_acceptance_filtered",
             )
 
 
@@ -717,13 +788,20 @@ tab_overview, tab_rankings, tab_queue, tab_student, tab_group = st.tabs(
 # TAB 1: OVERVIEW
 # ============================================================
 with tab_overview:
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Bugs", int(summary["Total"].sum()))
-    c2.metric("✅ Valid", int(summary["All Valid"].sum()))
-    c3.metric("❌ Invalid", int(summary["All Invalid"].sum()))
-    c4.metric("⏳ Pending", int(summary["All Pending"].sum()))
-    valid_pct = round(summary["All Valid"].sum() / summary["Total"].sum() * 100, 1) if summary["Total"].sum() > 0 else 0
-    c5.metric("Valid %", f"{valid_pct}%")
+    total_bugs = int(summary["Total"].sum())
+    total_valid = int(summary["All Valid"].sum())
+    total_invalid = int(summary["All Invalid"].sum())
+    total_pending = int(summary["All Pending"].sum())
+    hit_rate = round(total_valid / total_bugs * 100, 1) if total_bugs > 0 else 0
+    acceptance_pct, _ = acceptance_rate(total_valid, total_invalid)
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Bugs", total_bugs)
+    c2.metric("✅ Valid", total_valid)
+    c3.metric("❌ Invalid", total_invalid)
+    c4.metric("⏳ Pending", total_pending)
+    c5.metric("Hit Rate %", f"{hit_rate}%")
+    c6.metric("Acceptance %", f"{acceptance_pct}%")
 
     st.markdown("")
 
@@ -940,7 +1018,8 @@ with tab_queue:
         st.markdown("")
         render_age_note(queue_base)
 
-        c1, c2 = st.columns(2)
+        queue_valid, queue_invalid, _ = status_counts(queue_base)
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.plotly_chart(
                 queue_donut(queue_base, "Queue Mix", 220),
@@ -952,6 +1031,12 @@ with tab_queue:
                 sla_donut(queue_base[queue_base["is_actionable"]], "Aging / SLA Mix", 220),
                 width="stretch",
                 key="queue_sla",
+            )
+        with c3:
+            st.plotly_chart(
+                acceptance_donut(queue_valid, queue_invalid, "🧪 Acceptance", 220),
+                width="stretch",
+                key="queue_acceptance",
             )
 
         st.markdown("")
