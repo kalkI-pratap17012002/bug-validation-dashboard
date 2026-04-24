@@ -70,12 +70,18 @@ def build_sheet_url_candidates(raw_url):
         or "0"
     )
 
-    candidates = [
-        source,
-        f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}",
-        f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&gid={gid}",
-        f"https://docs.google.com/spreadsheets/d/{sid}/pub?gid={gid}&single=true&output=csv",
-    ]
+    candidates = []
+    lower_source = source.lower()
+    if "format=csv" in lower_source or "output=csv" in lower_source:
+        candidates.append(source)
+
+    candidates.extend(
+        [
+            f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}",
+            f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&gid={gid}",
+            f"https://docs.google.com/spreadsheets/d/{sid}/pub?gid={gid}&single=true&output=csv",
+        ]
+    )
 
     # Remove duplicates while preserving order.
     seen = set()
@@ -768,16 +774,27 @@ def load_data():
             req = Request(candidate, headers={"User-Agent": "Mozilla/5.0"})
             with urlopen(req, timeout=30) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
+
+            # /edit pages return HTML, not CSV. Skip those candidates.
+            if raw.lstrip().lower().startswith("<!doctype html") or "<html" in raw[:500].lower():
+                raise ValueError("received HTML instead of CSV")
+
             loaded = pd.read_csv(io.StringIO(raw))
-            loaded.columns = loaded.columns.str.strip()
+            loaded.columns = loaded.columns.astype(str).str.replace("\ufeff", "", regex=False).str.strip()
+
+            required = {GROUP_COL, TYPE_COL}
+            if not required.issubset(set(loaded.columns)):
+                raise ValueError(
+                    f"missing required columns {sorted(required)}; got columns {list(loaded.columns)[:12]}"
+                )
             return loaded
         except Exception as exc:
             failures.append((candidate, exc))
 
     # Re-raise a useful final exception for upstream handlers.
     if failures:
-        _, last_exc = failures[-1]
-        raise last_exc
+        details = "\n".join([f"- {url}: {err}" for url, err in failures])
+        raise RuntimeError(f"All CSV URL candidates failed:\n{details}")
     raise RuntimeError("No URL candidates generated for CSV loading.")
 
 
