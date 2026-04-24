@@ -1,10 +1,16 @@
+import io
+import os
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 # ===== CONFIG =====
-CSV_URL = "https://docs.google.com/spreadsheets/d/1c27MnpzjFIJrL5q6rn_PjS50KdFBxhXX2xzjIxqTDxs/export?format=csv&gid=602481885"
+DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1c27MnpzjFIJrL5q6rn_PjS50KdFBxhXX2xzjIxqTDxs/edit?gid=602481885#gid=602481885"
 SHEET_VIEW_URL = "https://docs.google.com/spreadsheets/d/1c27MnpzjFIJrL5q6rn_PjS50KdFBxhXX2xzjIxqTDxs/edit#gid=602481885"
 
 GROUP_COL = "Group number for which you are reporting a bug"
@@ -27,6 +33,58 @@ ACTION_LABELS = {
     "Needs Reviewer Comment": "needs_reviewer_reply",
     "Needs Student Rebuttal": "needs_student_reply",
 }
+
+
+def get_csv_url():
+    if "CSV_URL" in st.secrets:
+        return st.secrets["CSV_URL"]
+    return os.getenv("CSV_URL", DEFAULT_SHEET_URL)
+
+
+CSV_URL = get_csv_url()
+
+
+def build_sheet_url_candidates(raw_url):
+    source = str(raw_url).strip()
+    if not source:
+        return []
+
+    if "docs.google.com/spreadsheets/d/" not in source:
+        return [source]
+
+    try:
+        parsed = urlparse(source)
+        parts = [p for p in parsed.path.split("/") if p]
+        sid = parts[parts.index("d") + 1] if "d" in parts else None
+    except Exception:
+        sid = None
+
+    if not sid:
+        return [source]
+
+    query = parse_qs(parsed.query)
+    fragment_params = parse_qs(parsed.fragment)
+    gid = (
+        (query.get("gid") or [None])[0]
+        or (fragment_params.get("gid") or [None])[0]
+        or "0"
+    )
+
+    candidates = [
+        source,
+        f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}",
+        f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&gid={gid}",
+        f"https://docs.google.com/spreadsheets/d/{sid}/pub?gid={gid}&single=true&output=csv",
+    ]
+
+    # Remove duplicates while preserving order.
+    seen = set()
+    deduped = []
+    for url in candidates:
+        if url not in seen:
+            deduped.append(url)
+            seen.add(url)
+    return deduped
 
 # ===== Page Setup =====
 st.set_page_config(page_title="Bug Dashboard", page_icon="🐞", layout="wide")
@@ -704,13 +762,44 @@ def render_age_note(data):
 # ===== Data Load + Prep =====
 @st.cache_data(ttl=REFRESH_INTERVAL, show_spinner=False)
 def load_data():
-    loaded = pd.read_csv(CSV_URL)
-    loaded.columns = loaded.columns.str.strip()
-    return loaded
+    failures = []
+    for candidate in build_sheet_url_candidates(CSV_URL):
+        try:
+            req = Request(candidate, headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            loaded = pd.read_csv(io.StringIO(raw))
+            loaded.columns = loaded.columns.str.strip()
+            return loaded
+        except Exception as exc:
+            failures.append((candidate, exc))
+
+    # Re-raise a useful final exception for upstream handlers.
+    if failures:
+        _, last_exc = failures[-1]
+        raise last_exc
+    raise RuntimeError("No URL candidates generated for CSV loading.")
 
 
 try:
     df = load_data()
+except HTTPError as e:
+    if e.code in (401, 403):
+        st.error("Failed to load data: Google Sheet is not publicly accessible from Streamlit Cloud (HTTP 401/403).")
+        st.markdown(
+            """
+### Fix This
+1. Open the sheet and set **Share -> General access -> Anyone with the link (Viewer)**.
+2. If org policies block export links, use **File -> Share -> Publish to web**, then copy CSV URL.
+3. Set that URL as `CSV_URL` in Streamlit **App Settings -> Secrets** and redeploy.
+"""
+        )
+    else:
+        st.error(f"Failed to load data: HTTP {e.code} for URL: {CSV_URL}")
+    st.stop()
+except URLError as e:
+    st.error(f"Failed to load data: network error while fetching sheet ({e}).")
+    st.stop()
 except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
